@@ -12,6 +12,7 @@ import { Input } from "@/app/components/ui/input";
 import z from "zod/v3";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { authClient } from "@/lib/auth-client";
 
 const signUpFormSchema = z.object({
   name: z
@@ -38,8 +39,12 @@ export function SignUpForm({
     },
   });
 
-  function onSubmit(data: z.infer<typeof signUpFormSchema>) {
-    console.log(data);
+  async function onSubmit(dataForm: z.infer<typeof signUpFormSchema>) {
+    const { data, error } = await authClient.signUp.email({
+      name: dataForm.name,
+      email: dataForm.email,
+      password: dataForm.password,
+    });
   }
 
   return (

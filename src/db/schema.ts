@@ -7,24 +7,30 @@ import {
   timestamp,
   decimal,
   pgEnum,
-  primaryKey
+  primaryKey,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import { index } from "drizzle-orm/pg-core";
 
 export const bookingStatusEnum = pgEnum("booking_status", [
   "pending",
   "confirmed",
   "cancelled",
-  "finished"
+  "finished",
 ]);
 
 export const users = pgTable("users", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: varchar("name", { length: 255 }).notNull(),
-  email: varchar("email", { length: 255 }).notNull().unique(),
-  passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").default(false).notNull(),
+  image: text("image"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .$onUpdate(() => /* @__PURE__ */ new Date())
+    .notNull(),
 });
 
 export const workspaces = pgTable("workspaces", {
@@ -41,16 +47,26 @@ export const workspaces = pgTable("workspaces", {
   longitude: decimal("longitude", { precision: 11, scale: 8 }),
 });
 
-export const usersToWorkspaces = pgTable("users_to_workspaces", {
-  userId: uuid("user_id").references(() => users.id).notNull(),
-  workspaceId: uuid("workspace_id").references(() => workspaces.id).notNull(),
-}, (t) => ({
-  pk: primaryKey({ columns: [t.userId, t.workspaceId] }), // Boa prática: PK composta
-}));
+export const usersToWorkspaces = pgTable(
+  "users_to_workspaces",
+  {
+    userId: text("user_id")
+      .references(() => users.id)
+      .notNull(),
+    workspaceId: uuid("workspace_id")
+      .references(() => workspaces.id)
+      .notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.workspaceId] }),
+  }),
+);
 
 export const rooms = pgTable("rooms", {
   id: uuid("id").primaryKey().defaultRandom(),
-  workspaceId: uuid("workspace_id").references(() => workspaces.id).notNull(),
+  workspaceId: uuid("workspace_id")
+    .references(() => workspaces.id)
+    .notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
   pricePerHourInCents: integer("price_per_hour_in_cents").notNull(),
@@ -66,9 +82,15 @@ export const customers = pgTable("customers", {
 
 export const bookings = pgTable("bookings", {
   id: uuid("id").primaryKey().defaultRandom(),
-  roomId: uuid("room_id").references(() => rooms.id).notNull(),
-  createdByUserId: uuid("created_by_user_id").references(() => users.id).notNull(),
-  customerId: uuid("customer_id").references(() => customers.id).notNull(),
+  roomId: uuid("room_id")
+    .references(() => rooms.id)
+    .notNull(),
+  createdByUserId: text("created_by_user_id")
+    .references(() => users.id)
+    .notNull(),
+  customerId: uuid("customer_id")
+    .references(() => customers.id)
+    .notNull(),
   startDate: timestamp("start_date").notNull(),
   endDate: timestamp("end_date").notNull(),
   status: bookingStatusEnum("status").default("pending").notNull(),
@@ -76,10 +98,70 @@ export const bookings = pgTable("bookings", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const session = pgTable(
+  "session",
+  {
+    id: text("id").primaryKey(),
+    expiresAt: timestamp("expires_at").notNull(),
+    token: text("token").notNull().unique(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("session_userId_idx").on(table.userId)],
+);
+
+export const account = pgTable(
+  "account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at"),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [index("account_userId_idx").on(table.userId)],
+);
+
+export const verification = pgTable(
+  "verification",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [index("verification_identifier_idx").on(table.identifier)],
+);
 
 export const usersRelations = relations(users, ({ many }) => ({
   bookingsCreated: many(bookings),
   usersToWorkspaces: many(usersToWorkspaces),
+  sessions: many(session),
+  accounts: many(account),
 }));
 
 export const workspacesRelations = relations(workspaces, ({ many }) => ({
@@ -87,28 +169,54 @@ export const workspacesRelations = relations(workspaces, ({ many }) => ({
   usersToWorkspaces: many(usersToWorkspaces),
 }));
 
-export const usersToWorkspacesRelations = relations(usersToWorkspaces, ({ one }) => ({
-  user: one(users, {
-    fields: [usersToWorkspaces.userId],
-    references: [users.id],
+export const usersToWorkspacesRelations = relations(
+  usersToWorkspaces,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [usersToWorkspaces.userId],
+      references: [users.id],
+    }),
+    workspace: one(workspaces, {
+      fields: [usersToWorkspaces.workspaceId],
+      references: [workspaces.id],
+    }),
   }),
-  workspace: one(workspaces, {
-    fields: [usersToWorkspaces.workspaceId],
-    references: [workspaces.id],
-  }),
-}));
+);
 
 export const roomsRelations = relations(rooms, ({ one, many }) => ({
-  workspace: one(workspaces, { fields: [rooms.workspaceId], references: [workspaces.id] }),
+  workspace: one(workspaces, {
+    fields: [rooms.workspaceId],
+    references: [workspaces.id],
+  }),
   bookings: many(bookings),
 }));
 
 export const bookingsRelations = relations(bookings, ({ one }) => ({
   room: one(rooms, { fields: [bookings.roomId], references: [rooms.id] }),
-  creator: one(users, { fields: [bookings.createdByUserId], references: [users.id] }),
-  customer: one(customers, { fields: [bookings.customerId], references: [customers.id] }),
+  creator: one(users, {
+    fields: [bookings.createdByUserId],
+    references: [users.id],
+  }),
+  customer: one(customers, {
+    fields: [bookings.customerId],
+    references: [customers.id],
+  }),
 }));
 
 export const customersRelations = relations(customers, ({ many }) => ({
   bookings: many(bookings),
+}));
+
+export const sessionRelations = relations(session, ({ one }) => ({
+  user: one(users, {
+    fields: [session.userId],
+    references: [users.id],
+  }),
+}));
+
+export const accountRelations = relations(account, ({ one }) => ({
+  user: one(users, {
+    fields: [account.userId],
+    references: [users.id],
+  }),
 }));
